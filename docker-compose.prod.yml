@@ -1,0 +1,238 @@
+# ============================================================
+# JurisIA — Docker Compose PRODUCTION
+# Différences vs dev : volumes nommés persistants, restart always,
+# pas de MinIO (utilise OVH Object Storage), limites de ressources.
+# Usage : docker compose -f docker-compose.prod.yml up -d
+# ============================================================
+# Prérequis : fichier .env rempli avec les valeurs de production
+
+services:
+
+  # ── Backend FastAPI ──────────────────────────────────────────────────────────
+  backend:
+    image: ghcr.io/jurisai/jurisai-backend:latest
+    container_name: jurisai_backend
+    restart: always
+    ports:
+      - "127.0.0.1:8000:8000"   # Accessible uniquement en local (Nginx en frontal)
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+    volumes:
+      - ./logs/backend:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Celery Worker (tâches asynchrones IA) ────────────────────────────────────
+  celery_worker:
+    image: ghcr.io/jurisai/jurisai-backend:latest
+    container_name: jurisai_celery
+    restart: always
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4 -Q default,ai_tasks
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 3G        # Plus de RAM pour les tâches LLM
+        reservations:
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── Celery Beat (tâches planifiées) ──────────────────────────────────────────
+  celery_beat:
+    image: ghcr.io/jurisai/jurisai-backend:latest
+    container_name: jurisai_celery_beat
+    restart: always
+    command: celery -A app.core.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── PostgreSQL 16 ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: jurisai_postgres_prod
+    restart: always
+    ports:
+      - "127.0.0.1:5432:5432"   # Local uniquement
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-jurisai}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}        # Requis en production
+      POSTGRES_DB:       ${POSTGRES_DB:-jurisai_prod}
+      PGDATA:            /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./backups/postgres:/backups    # Dossier de backups monté
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jurisai}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ── Redis 7 ──────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: jurisai_redis_prod
+    restart: always
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      redis-server
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD:-}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768M
+
+  # ── Qdrant (Vector DB pour RAG) ───────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: jurisai_qdrant_prod
+    restart: always
+    ports:
+      - "127.0.0.1:6333:6333"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+
+  # ── Nginx (Reverse Proxy + SSL) ───────────────────────────────────────────────
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: jurisai_nginx_prod
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/jurisai.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro           # Certificats Let's Encrypt
+      - /var/www/certbot:/var/www/certbot:ro            # Challenge ACME
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  # ── Certbot (renouvellement SSL automatique) ──────────────────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    container_name: jurisai_certbot
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+    # Renouvellement toutes les 12h (Let's Encrypt expire tous les 90 jours)
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done'"
+    profiles: ["ssl"]   # Activer avec : docker compose --profile ssl up -d
+
+# ── Volumes Persistants ────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o:    bind
+      device: /opt/jurisai/data/postgres   # Chemin physique sur le serveur
+
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o:    bind
+      device: /opt/jurisai/data/redis
+
+  qdrant_data:
+    driver: local
+    driver_opts:
+      type: none
+      o:    bind
+      device: /opt/jurisai/data/qdrant
+
+# ── Réseau Interne ─────────────────────────────────────────────────────────────
+networks:
+  default:
+    name:   jurisai_prod_network
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

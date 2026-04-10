@@ -1,0 +1,91 @@
+# ============================================
+# JurisIA Backend — Dépendances Python
+# Python >= 3.11 requis
+# Installation : pip install -r requirements.txt
+# ============================================
+
+# --- Framework API ---
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18     # Upload de fichiers
+
+# --- Base de données ---
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0              # Driver PostgreSQL async
+alembic==1.14.0              # Migrations DB
+
+# --- Validation & Sérialisation ---
+pydantic==2.10.3
+pydantic-settings==2.6.1     # Gestion des variables d'environnement
+email-validator==2.2.0
+
+# --- Authentication & Sécurité ---
+python-jose[cryptography]==3.3.0   # JWT
+passlib[argon2]==1.7.4             # Hashage mots de passe (Argon2id)
+argon2-cffi==23.1.0
+cryptography==44.0.0               # Chiffrement données sensibles (Fernet)
+pyotp==2.9.0                       # 2FA TOTP
+
+# --- IA & LLM ---
+mistralai==1.2.6             # Mistral AI SDK officiel
+langchain==0.3.12            # Orchestration RAG
+langchain-mistralai==0.2.4   # Intégration Mistral + LangChain
+langchain-community==0.3.12  # Connecteurs communautaires
+qdrant-client==1.12.1        # Vector Database client
+sentence-transformers==3.3.1 # Embeddings locaux (fallback)
+
+# --- Traitement de Documents ---
+pypdf2==3.0.1                # Parsing PDF
+python-docx==1.1.2           # Parsing DOCX
+pdfplumber==0.11.4           # PDF avancé (tables, mise en forme)
+reportlab==4.2.5             # Génération PDF (rapports)
+
+# --- Stockage Fichiers ---
+boto3==1.35.76               # Client S3-compatible (OVH Object Storage)
+
+# --- Queue & Tâches Asynchrones ---
+celery==5.4.0
+redis==5.2.1
+flower==2.0.1                # Monitoring Celery (dev)
+
+# --- Emails ---
+mailjet-rest==1.3.4
+
+# --- Paiements ---
+stripe==11.2.0
+
+# --- HTTP Client ---
+httpx==0.27.2                # Async HTTP (appels API tiers)
+tenacity==9.0.0              # Retry automatique
+
+# --- Utilitaires ---
+python-dateutil==2.9.0
+pytz==2024.2
+babel==2.16.0                # Formatage dates/nombres FR
+slugify==0.0.1
+python-ulid==3.0.0           # ULID pour IDs (meilleur que UUID pour index)
+
+# --- Logging & Monitoring ---
+structlog==24.4.0            # Logging structuré JSON
+sentry-sdk[fastapi]==2.19.2
+prometheus-client==0.21.1    # Métriques Prometheus
+
+# --- Signature Electronique ---
+requests==2.32.3             # Yousign API (pas de SDK officiel)
+
+# --- CORS & Sécurité ---
+slowapi==0.1.9               # Rate limiting FastAPI
+
+# ============================================
+# Dépendances de développement uniquement
+# ============================================
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+pytest-mock==3.14.0
+httpx==0.27.2                # TestClient async
+factory-boy==3.3.1           # Factories pour les tests
+faker==33.1.0                # Données de test réalistes
+ruff==0.8.3                  # Linter + formatter
+mypy==1.13.0                 # Type checking
+pre-commit==4.0.1
